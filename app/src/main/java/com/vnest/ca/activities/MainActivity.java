@@ -1,5 +1,7 @@
 package com.vnest.ca.activities;
 
+import ai.api.model.AIContext;
+import ai.api.model.AIOutputContext;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
@@ -20,6 +22,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.provider.Settings;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
@@ -47,6 +50,7 @@ import com.vnest.ca.R;
 import com.vnest.ca.adapters.MessageListAdapter;
 import com.vnest.ca.entity.Audio;
 import com.vnest.ca.entity.Message;
+import com.vnest.ca.entity.MyAIContext;
 import com.vnest.ca.entity.Youtube;
 import com.vnest.ca.triggerword.Trigger;
 
@@ -83,8 +87,7 @@ public class MainActivity extends AppCompatActivity implements LocationListener 
             Manifest.permission.VIBRATE,
             Manifest.permission.READ_EXTERNAL_STORAGE,
             Manifest.permission.WRITE_EXTERNAL_STORAGE,
-            Manifest.permission.SET_ALARM,
-            Manifest.permission.READ_PHONE_STATE,};
+            Manifest.permission.SET_ALARM};
 
     private RecyclerView mMessageRecycler;
     private List<Message> messageList;
@@ -109,6 +112,10 @@ public class MainActivity extends AppCompatActivity implements LocationListener 
     private Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     private String deviceId;
+    private boolean notchangesessionid = false;
+    private String currentSessionId;
+
+    private List<AIOutputContext> contexts;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -129,8 +136,19 @@ public class MainActivity extends AppCompatActivity implements LocationListener 
     }
 
     private void init() {
-        TelephonyManager telephonyManager = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
-        deviceId = telephonyManager.getDeviceId();
+
+        deviceId = Settings.Secure.getString(getContentResolver(),
+                Settings.Secure.ANDROID_ID);
+
+        // Get phone's location
+        locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED &&
+                ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            return;
+        }
+        Location location = locationManager.getLastKnownLocation(locationManager.NETWORK_PROVIDER);
+        onLocationChanged(location);
 
         // setup UI Message
         mMessageRecycler = (RecyclerView) findViewById(R.id.reyclerview_message_list);
@@ -273,72 +291,91 @@ public class MainActivity extends AppCompatActivity implements LocationListener 
 
     private void processing_text(final String text) {
         Log.d(LOG_TAG, "================= processing_text: " + text);
-        if (text.toLowerCase().contains("thời tiết")) {
-            weather();
-        } else if (text.toLowerCase().contains("tìm")) {
-            search(text);
-        } else {
-            Thread thread = new Thread(new Runnable() {
-                @Override
-                public void run() {
+
+        Thread thread = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    AIRequest aiRequest = new AIRequest(text);
+                    if (!notchangesessionid || currentSessionId == null) {
+                        currentSessionId = deviceId + "#" + latitude + "-" + longitude;
+                    }
+                    aiRequest.setSessionId(currentSessionId);
+                    if (contexts != null) {
+                        List<AIContext> rqContexts = new ArrayList<>();
+                        for (AIOutputContext oc : contexts) {
+                            rqContexts.add(new MyAIContext(oc));
+                        }
+                        aiRequest.setContexts(rqContexts);
+                    }
+
+                    Log.d(LOG_TAG, "===== aiRequest:" + gson.toJson(aiRequest));
                     try {
-                        AIRequest aiRequest = new AIRequest(text);
-                        String sessionId = deviceId + "#" + latitude + "-" + longitude;
-                        aiRequest.setSessionId(sessionId);
+                        AIResponse aiRes = aiService.textRequest(aiRequest);
+
+                        Log.d(LOG_TAG, gson.toJson(aiRes));
+                        String action = aiRes.getResult().getAction().toLowerCase();
+                        Log.d(LOG_TAG, "===== action:" + action);
+                        contexts = aiRes.getResult().getContexts();
+                        String code = aiRes.getResult().getFulfillment().getData().get("code").toString().replace("\"", "");
                         try {
-                            AIResponse aiRes = aiService.textRequest(aiRequest);
-                            Log.d(LOG_TAG, gson.toJson(aiRes));
-                            String action = aiRes.getResult().getAction().toLowerCase();
-                            Log.d(LOG_TAG, "===== action:" + action);
-                            switch (action) {
-                                case "input.unknown":
-                                    String textSpeech = aiRes.getResult().getFulfillment().getSpeech();
+                            notchangesessionid = aiRes.getResult().getFulfillment().getData().get("notchangesessionid").getAsBoolean();
+                            Log.d(LOG_TAG, "===== notchangesessionid: " + notchangesessionid);
+                        } catch (Exception e) {
+
+                        }
+                        switch (action) {
+                            case "input.unknown":
+                                String textSpeech = aiRes.getResult().getFulfillment().getSpeech();
+                                Log.d(LOG_TAG, "===== textSpeech:" + textSpeech);
+                                textToSpeech.speak(textSpeech, TextToSpeech.QUEUE_FLUSH, null);
+                                sendMessage(textSpeech, false);
+                                break;
+                            case "mp3":
+                                Log.d(LOG_TAG, "======= code:" + code);
+                                if (code.equals("1")) {
+                                    Audio audio = gson.fromJson(
+                                            aiRes.getResult().getFulfillment().getData().get("audios").getAsJsonArray().get(0).toString(), Audio.class);
+                                    Intent intent = new Intent(Intent.ACTION_VIEW);
+                                    intent.setData(Uri.parse(audio.getLink()));
+                                    intent.setPackage("com.zing.mp3");
+                                    startActivity(intent);
+                                    sendMessage(audio.getAlias(), false);
+                                } else {
+                                    textSpeech = aiRes.getResult().getFulfillment().getSpeech();
                                     Log.d(LOG_TAG, "===== textSpeech:" + textSpeech);
                                     textToSpeech.speak(textSpeech, TextToSpeech.QUEUE_FLUSH, null);
                                     sendMessage(textSpeech, false);
-                                    break;
-                                case "mp3":
-                                    String code = aiRes.getResult().getFulfillment().getData().get("code").toString().replace("\"", "");
-                                    Log.d(LOG_TAG, "======= code:" + code);
-                                    if (code.equals("1")) {
-                                        Audio audio = gson.fromJson(
-                                                aiRes.getResult().getFulfillment().getData().get("audios").getAsJsonArray().get(0).toString(), Audio.class);
-                                        Intent intent = new Intent(Intent.ACTION_VIEW);
-                                        intent.setData(Uri.parse(audio.getLink()));
-                                        intent.setPackage("com.zing.mp3");
-                                        startActivity(intent);
-                                        sendMessage(audio.getAlias(), false);
-                                    } else {
-                                        textSpeech = aiRes.getResult().getFulfillment().getSpeech();
-                                        Log.d(LOG_TAG, "===== textSpeech:" + textSpeech);
-                                        textToSpeech.speak(textSpeech, TextToSpeech.QUEUE_FLUSH, null);
-                                        sendMessage(textSpeech, false);
-                                    }
-                                    break;
-                                case "youtube":
-                                    Youtube video = gson.fromJson(
-                                            aiRes.getResult().getFulfillment().getData().get("videos").getAsJsonArray().get(0).toString(), Youtube.class);
-                                    Intent intent = new Intent(Intent.ACTION_VIEW);
-                                    intent.setData(Uri.parse(video.getHref()));
-                                    intent.setPackage("com.google.android.youtube");
-                                    startActivity(intent);
-                                    sendMessage(video.getHref(), false);
-                                    break;
-
-                            }
-
-                        } catch (AIServiceException e) {
-                            Log.e(LOG_TAG, e.getMessage(), e);
+                                }
+                                break;
+                            case "youtube":
+                                Youtube video = gson.fromJson(
+                                        aiRes.getResult().getFulfillment().getData().get("videos").getAsJsonArray().get(0).toString(), Youtube.class);
+                                Intent intent = new Intent(Intent.ACTION_VIEW);
+                                intent.setData(Uri.parse(video.getHref()));
+                                intent.setPackage("com.google.android.youtube");
+                                startActivity(intent);
+                                sendMessage(video.getHref(), false);
+                                break;
+                            default:
+                                if (text.toLowerCase().contains("thời tiết")) {
+                                    weather();
+                                } else if (text.toLowerCase().contains("tìm")) {
+                                    search(text);
+                                }
                         }
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    } finally {
-                        isExcecuteText = false;
+
+                    } catch (AIServiceException e) {
+                        Log.e(LOG_TAG, e.getMessage(), e);
                     }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                } finally {
+                    isExcecuteText = false;
                 }
-            });
-            thread.start();
-        }
+            }
+        });
+        thread.start();
     }
 
     private void sendMessage(String text, boolean isUser) {
@@ -362,17 +399,17 @@ public class MainActivity extends AppCompatActivity implements LocationListener 
      * Check permission
      */
     private void requestPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            List<String> remainingPermissions = new ArrayList<>();
-            for (String permission : permissions) {
-                if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
-                    remainingPermissions.add(permission);
-                }
-            }
-            if (remainingPermissions.size() > 0) {
-                requestPermissions(remainingPermissions.toArray(new String[remainingPermissions.size()]), 101);
+//        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        List<String> remainingPermissions = new ArrayList<>();
+        for (String permission : permissions) {
+            if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+                remainingPermissions.add(permission);
             }
         }
+        if (remainingPermissions.size() > 0) {
+            requestPermissions(remainingPermissions.toArray(new String[remainingPermissions.size()]), 101);
+        }
+//        }
     }
 
     private void writeCsvMessage() {
