@@ -806,9 +806,18 @@ public class MainActivity extends AppCompatActivity implements LocationListener,
 
             @Override
             protected void onPostExecute(Exception result) {
-                startRecognition();
+                switchSearch(KWS_SEARCH);
             }
         }.execute();
+    }
+
+    private void switchSearch(String searchName) {
+        recognizer.stop();
+
+        // If we are not spotting, start listening with timeout (10000 ms or 10 seconds).
+        if (searchName.equals(KWS_SEARCH))
+            startRecognition();
+
     }
 
     private void setupRecognizer(File assetsDir) throws IOException {
@@ -847,6 +856,7 @@ public class MainActivity extends AppCompatActivity implements LocationListener,
         if (hypothesis == null)
             return;
 
+        recognizer.stop();
         String text = hypothesis.getHypstr();
         if (text.equals(KEYPHRASE))
             startRecognition();
