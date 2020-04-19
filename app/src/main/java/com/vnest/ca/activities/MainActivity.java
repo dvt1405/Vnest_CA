@@ -19,6 +19,7 @@ import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
 import android.net.Uri;
+import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
@@ -73,8 +74,12 @@ import ai.api.android.AIConfiguration;
 import ai.api.android.AIService;
 import ai.api.model.AIRequest;
 import ai.api.model.AIResponse;
+import edu.cmu.pocketsphinx.Assets;
+import edu.cmu.pocketsphinx.Hypothesis;
+import edu.cmu.pocketsphinx.RecognitionListener;
+import edu.cmu.pocketsphinx.SpeechRecognizerSetup;
 
-public class MainActivity extends AppCompatActivity implements LocationListener {
+public class MainActivity extends AppCompatActivity implements LocationListener, RecognitionListener {
 
     private static final String LOG_TAG = "VNest";
 
@@ -89,6 +94,9 @@ public class MainActivity extends AppCompatActivity implements LocationListener 
             Manifest.permission.WRITE_EXTERNAL_STORAGE,
             Manifest.permission.SET_ALARM};
 
+    private static final String KWS_SEARCH = "wakeup";
+    private static final String KEYPHRASE = "wakeup";
+
     private RecyclerView mMessageRecycler;
     private List<Message> messageList;
     private MessageListAdapter mMessageAdapter;
@@ -100,6 +108,7 @@ public class MainActivity extends AppCompatActivity implements LocationListener 
     private TextToSpeech textToSpeech;
 
     private SpeechRecognizer speechRecognizer;
+    private edu.cmu.pocketsphinx.SpeechRecognizer recognizer;
     private Intent mSpeechRecognizerIntent;
 
     private AIService aiService;
@@ -133,6 +142,8 @@ public class MainActivity extends AppCompatActivity implements LocationListener 
                 Locale.getDefault());
 
 //        startRecognition();
+
+        runRecognizerSetup();
     }
 
     private void init() {
@@ -774,6 +785,86 @@ public class MainActivity extends AppCompatActivity implements LocationListener 
 
     @Override
     public void onProviderDisabled(String s) {
+
+    }
+
+    private void runRecognizerSetup() {
+        // Recognizer initialization is a time-consuming and it involves IO,
+        // so we execute it in async task
+        new AsyncTask<Void, Void, Exception>() {
+            @Override
+            protected Exception doInBackground(Void... params) {
+                try {
+                    Assets assets = new Assets(MainActivity.this);
+                    File assetDir = assets.syncAssets();
+                    setupRecognizer(assetDir);
+                } catch (IOException e) {
+                    return e;
+                }
+                return null;
+            }
+
+            @Override
+            protected void onPostExecute(Exception result) {
+                startRecognition();
+            }
+        }.execute();
+    }
+
+    private void setupRecognizer(File assetsDir) throws IOException {
+        // The recognizer can be configured to perform multiple searches
+        // of different kind and switch between them
+
+        recognizer = SpeechRecognizerSetup.defaultSetup()
+                .setAcousticModel(new File(assetsDir, "en-us-ptm"))
+                .setDictionary(new File(assetsDir, "cmudict-en-us.dict"))
+
+                .setRawLogDir(assetsDir) // To disable logging of raw audio comment out this call (takes a lot of space on the device)
+
+                .getRecognizer();
+        recognizer.addListener(this);
+
+        /** In your application you might not need to add all those searches.
+         * They are added here for demonstration. You can leave just one.
+         */
+
+        // Create keyword-activation search.
+        recognizer.addKeyphraseSearch(KWS_SEARCH, KEYPHRASE);
+    }
+
+    @Override
+    public void onBeginningOfSpeech() {
+
+    }
+
+    @Override
+    public void onEndOfSpeech() {
+
+    }
+
+    @Override
+    public void onPartialResult(Hypothesis hypothesis) {
+        if (hypothesis == null)
+            return;
+
+        String text = hypothesis.getHypstr();
+        if (text.equals(KEYPHRASE))
+            startRecognition();
+
+    }
+
+    @Override
+    public void onResult(Hypothesis hypothesis) {
+
+    }
+
+    @Override
+    public void onError(Exception e) {
+
+    }
+
+    @Override
+    public void onTimeout() {
 
     }
 }

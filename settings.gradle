@@ -1,2 +1,2 @@
 rootProject.name='Vnest_CA'
-include ':app', ':pocketsphinx-android-5prealpha-release'
+include ':app',':models', ':pocketsphinx-android-5prealpha-release'

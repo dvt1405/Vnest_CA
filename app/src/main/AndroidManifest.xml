@@ -17,7 +17,7 @@
             </intent-filter>
         </activity>
 
-        <service android:name=".triggerword.Trigger" />
+<!--        <service android:name=".triggerword.Trigger" />-->
 
     </application>
 

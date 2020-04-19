@@ -34,6 +34,7 @@ dependencies {
 
     implementation 'com.github.zagum:SpeechRecognitionView:1.2.2'
     implementation project(path: ':pocketsphinx-android-5prealpha-release')
+    implementation project(':models')
     implementation 'com.github.timigod:android-chat-ui:v0.1.4'
 
     implementation 'com.github.KwabenBerko:OpenWeatherMap-Android-Library:2.0.1'
